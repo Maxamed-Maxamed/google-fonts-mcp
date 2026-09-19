@@ -14,10 +14,26 @@ import {
   getWeights,
   searchFonts,
   type FontCategory,
+  type GoogleFont,
 } from "./fonts.js";
+import {
+  DEFAULT_PREVIEW_TEXT,
+  buildPreview,
+  buildStylesheetUrl,
+  describeVariant,
+  fontFamilyValue,
+  isValidColour,
+  variantKey,
+} from "./preview.js";
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
+const DEFAULT_SIZE = 48;
+const MIN_SIZE = 8;
+const MAX_SIZE = 200;
+const DEFAULT_WEIGHT = 400;
+const DEFAULT_COLOUR = "#111111";
+const DEFAULT_EMBED_WEIGHTS = [400, 700];
 
 const server = new Server(
   { name: "google-fonts-mcp", version: "0.1.0" },
@@ -67,6 +83,69 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["family"],
       },
     },
+    {
+      name: "preview_text",
+      description:
+        "Render sample text in a Google Font. Returns a self-contained HTML page. The weight/italic combination must exist in the family.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          family: {
+            type: "string",
+            description: 'Family name, case-insensitive (e.g. "Open Sans")',
+          },
+          text: {
+            type: "string",
+            default: DEFAULT_PREVIEW_TEXT,
+            description: "Sample text to render",
+          },
+          size: {
+            type: "number",
+            default: DEFAULT_SIZE,
+            minimum: MIN_SIZE,
+            maximum: MAX_SIZE,
+            description: `Font size in pixels (${MIN_SIZE}-${MAX_SIZE})`,
+          },
+          weight: {
+            type: "number",
+            default: DEFAULT_WEIGHT,
+            description: "Font weight, e.g. 400 or 700",
+          },
+          italic: {
+            type: "boolean",
+            default: false,
+            description: "Render in italic",
+          },
+          colour: {
+            type: "string",
+            default: DEFAULT_COLOUR,
+            description: 'Text colour: hex (e.g. "#1a1a1a"), a CSS colour name, or rgb()/hsl()',
+          },
+        },
+        required: ["family"],
+      },
+    },
+    {
+      name: "get_embed_code",
+      description:
+        "Get the HTML link tags and CSS font-family declaration to use a Google Font on a web page.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          family: {
+            type: "string",
+            description: 'Family name, case-insensitive (e.g. "Open Sans")',
+          },
+          weights: {
+            type: "array",
+            items: { type: "number" },
+            default: DEFAULT_EMBED_WEIGHTS,
+            description: "Upright weights to load, e.g. [400, 700]",
+          },
+        },
+        required: ["family"],
+      },
+    },
   ],
 }));
 
@@ -79,6 +158,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return await handleSearchFonts(args);
       case "get_font_details":
         return await handleGetFontDetails(args);
+      case "preview_text":
+        return await handlePreviewText(args);
+      case "get_embed_code":
+        return await handleGetEmbedCode(args);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -141,12 +224,7 @@ async function handleGetFontDetails(
 
   const font = await getFont(family);
   if (!font) {
-    const suggestions = await findClosestFonts(family);
-    const hint =
-      suggestions.length > 0
-        ? `Did you mean:\n${suggestions.map((s) => `- ${s}`).join("\n")}`
-        : "Try search_fonts to find the family you're looking for.";
-    return textResult(`No font family named "${family.trim()}" was found.\n\n${hint}`);
+    return textResult(await notFoundMessage(family));
   }
 
   return textResult(
@@ -161,6 +239,140 @@ async function handleGetFontDetails(
       `Last modified: ${font.lastModified}`,
     ].join("\n"),
   );
+}
+
+async function handlePreviewText(
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  const {
+    family,
+    text = DEFAULT_PREVIEW_TEXT,
+    size = DEFAULT_SIZE,
+    weight = DEFAULT_WEIGHT,
+    italic = false,
+    colour = DEFAULT_COLOUR,
+  } = args;
+
+  if (typeof family !== "string" || !family.trim()) {
+    return errorResult("family is required and must be a non-empty string.");
+  }
+  if (typeof text !== "string" || !text) {
+    return errorResult("text must be a non-empty string.");
+  }
+  if (typeof size !== "number" || !(size >= MIN_SIZE && size <= MAX_SIZE)) {
+    return errorResult(`size must be a number from ${MIN_SIZE} to ${MAX_SIZE}.`);
+  }
+  if (typeof weight !== "number" || !Number.isInteger(weight)) {
+    return errorResult("weight must be an integer, e.g. 400 or 700.");
+  }
+  if (typeof italic !== "boolean") {
+    return errorResult("italic must be true or false.");
+  }
+  if (typeof colour !== "string" || !isValidColour(colour.trim())) {
+    return errorResult(
+      'colour must be a hex colour (e.g. "#1a1a1a"), a CSS colour name, or an rgb()/hsl() value.',
+    );
+  }
+
+  const font = await getFont(family);
+  if (!font) {
+    return errorResult(await notFoundMessage(family));
+  }
+
+  const variant = variantKey(weight, italic);
+  if (!font.variants.includes(variant)) {
+    return errorResult(
+      `${font.family} is not available in ${describeVariant(variant)}.\n\nAvailable variants: ${formatVariants(font)}`,
+    );
+  }
+
+  const html = buildPreview({
+    font,
+    text,
+    size,
+    weight,
+    italic,
+    colour: colour.trim(),
+  });
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Preview of ${font.family} (${font.category}) at ${size}px, weight ${describeVariant(variant)}, colour ${colour.trim()}.`,
+      },
+      { type: "text", text: html },
+    ],
+  };
+}
+
+async function handleGetEmbedCode(
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  const { family, weights = DEFAULT_EMBED_WEIGHTS } = args;
+
+  if (typeof family !== "string" || !family.trim()) {
+    return errorResult("family is required and must be a non-empty string.");
+  }
+  if (
+    !Array.isArray(weights) ||
+    weights.length === 0 ||
+    !weights.every((w) => typeof w === "number" && Number.isInteger(w))
+  ) {
+    return errorResult("weights must be a non-empty array of integers, e.g. [400, 700].");
+  }
+
+  const font = await getFont(family);
+  if (!font) {
+    return errorResult(await notFoundMessage(family));
+  }
+
+  const requested = [...new Set(weights as number[])].sort((a, b) => a - b);
+  const missing = requested.filter(
+    (w) => !font.variants.includes(variantKey(w, false)),
+  );
+  if (missing.length > 0) {
+    const available = font.variants
+      .filter((v) => !v.endsWith("italic"))
+      .map(describeVariant);
+    return errorResult(
+      `${font.family} does not have weight${missing.length === 1 ? "" : "s"} ${missing.join(", ")}.\n\nAvailable weights: ${available.join(", ")}`,
+    );
+  }
+
+  const href = buildStylesheetUrl(
+    font.family,
+    requested.map((weight) => ({ weight, italic: false })),
+  ).replace(/&/g, "&amp;");
+
+  return textResult(
+    [
+      `Embed code for ${font.family} (weights ${requested.join(", ")}):`,
+      "",
+      "HTML (place in <head>):",
+      "",
+      '<link rel="preconnect" href="https://fonts.googleapis.com">',
+      '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>',
+      `<link href="${href}" rel="stylesheet">`,
+      "",
+      "CSS:",
+      "",
+      `font-family: ${fontFamilyValue(font)};`,
+    ].join("\n"),
+  );
+}
+
+async function notFoundMessage(family: string): Promise<string> {
+  const suggestions = await findClosestFonts(family);
+  const hint =
+    suggestions.length > 0
+      ? `Did you mean:\n${suggestions.map((s) => `- ${s}`).join("\n")}`
+      : "Try search_fonts to find the family you're looking for.";
+  return `No font family named "${family.trim()}" was found.\n\n${hint}`;
+}
+
+function formatVariants(font: GoogleFont): string {
+  return font.variants.map(describeVariant).join(", ");
 }
 
 function isFontCategory(value: unknown): value is FontCategory {
