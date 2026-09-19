@@ -340,10 +340,12 @@ async function handleGetEmbedCode(
     );
   }
 
+  // Family names are percent-encoded, so the URL is safe in a quoted attribute
+  // as-is. Keep the plain "&" so the snippet matches what Google Fonts gives out.
   const href = buildStylesheetUrl(
     font.family,
     requested.map((weight) => ({ weight, italic: false })),
-  ).replace(/&/g, "&amp;");
+  );
 
   return textResult(
     [
