@@ -1,7 +1,27 @@
 {
   "name": "google-fonts-mcp",
   "version": "0.1.0",
-  "description": "MCP server for the Google Fonts API",
+  "description": "MCP server for searching, previewing and embedding Google Fonts",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "google-fonts",
+    "fonts",
+    "typography",
+    "claude",
+    "anthropic",
+    "mcp-server"
+  ],
+  "author": "Maxamed Maxamed",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Maxamed-Maxamed/google-fonts-mcp.git"
+  },
+  "homepage": "https://github.com/Maxamed-Maxamed/google-fonts-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Maxamed-Maxamed/google-fonts-mcp/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -18,7 +38,6 @@
   "engines": {
     "node": ">=18"
   },
-  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^18.0.1"
